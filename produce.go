@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/user"
 	"strings"
 	"time"
 
@@ -22,12 +21,12 @@ type produceArgs struct {
 	batch       int
 	timeout     time.Duration
 	verbose     bool
-	version     string
 	literal     bool
 	decodeKey   string
 	decodeValue string
 	partitioner string
 	bufferSize  int
+	connArgs    connectionArgs
 }
 
 type message struct {
@@ -46,12 +45,12 @@ func (cmd *produceCmd) read(as []string) produceArgs {
 	flags.DurationVar(&args.timeout, "timeout", 50*time.Millisecond, "Duration to wait for batch to be filled before sending it off")
 	flags.BoolVar(&args.verbose, "verbose", false, "Verbose output")
 	flags.BoolVar(&args.literal, "literal", false, "Interpret stdin line literally and pass it as value, key as null.")
-	flags.StringVar(&args.version, "version", "", "Kafka protocol version")
 	flags.StringVar(&args.partitioner, "partitioner", "", "Optional partitioner to use. Available: hashCode")
 	flags.StringVar(&args.decodeKey, "decodekey", "string", "Decode message value as (string|hex|base64), defaults to string.")
 	flags.StringVar(&args.decodeValue, "decodevalue", "string", "Decode message value as (string|hex|base64), defaults to string.")
 	flags.IntVar(&args.bufferSize, "buffersize", 16777216, "Buffer size for scanning stdin, defaults to 16777216=16*1024*1024.")
 
+	parseConnectionFlags(flags, &args.connArgs)
 	flags.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage of produce:")
 		flags.PrintDefaults()
@@ -117,52 +116,27 @@ func (cmd *produceCmd) parseArgs(as []string) {
 	cmd.verbose = args.verbose
 	cmd.literal = args.literal
 	cmd.partition = int32(args.partition)
-	cmd.version = kafkaVersion(args.version)
 	cmd.bufferSize = args.bufferSize
-}
-
-func (cmd *produceCmd) mkSaramaConfig() {
-	var (
-		usr *user.User
-		err error
-	)
-
-	cmd.saramaConfig = sarama.NewConfig()
-	cmd.saramaConfig.Producer.RequiredAcks = sarama.WaitForAll
-	cmd.saramaConfig.Version = cmd.version
-	if usr, err = user.Current(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to read current user err=%v", err)
-	}
-	cmd.saramaConfig.ClientID = "kt-produce-" + usr.Username
-	if cmd.verbose {
-		fmt.Fprintf(os.Stderr, "sarama client configuration %#v\n", cmd.saramaConfig)
-	}
-
+	cmd.clientConfig = saramaConfig(&args.connArgs)
 }
 
 func (cmd *produceCmd) findLeaders() {
 	var (
-		usr *user.User
 		err error
 		res *sarama.MetadataResponse
 		req = sarama.MetadataRequest{Topics: []string{cmd.topic}}
-		cfg = sarama.NewConfig()
 	)
 
-	cfg.Producer.RequiredAcks = sarama.WaitForAll
-	cfg.Version = cmd.version
-	if usr, err = user.Current(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to read current user err=%v", err)
-	}
-	cfg.ClientID = "kt-produce-" + sanitizeUsername(usr.Username)
+	cmd.clientConfig.Producer.RequiredAcks = sarama.WaitForAll
+
 	if cmd.verbose {
-		fmt.Fprintf(os.Stderr, "sarama client configuration %#v\n", cfg)
+		fmt.Fprintf(os.Stderr, "sarama client configuration %#v\n", cmd.clientConfig)
 	}
 
 loop:
 	for _, addr := range cmd.brokers {
 		broker := sarama.NewBroker(addr)
-		if err = broker.Open(cfg); err != nil {
+		if err = broker.Open(cmd.clientConfig); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to open broker connection to %v. err=%s\n", addr, err)
 			continue loop
 		}
@@ -195,7 +169,7 @@ loop:
 						failf("failed to find leader in broker response, giving up")
 					}
 
-					if err = b.Open(cfg); err != nil && err != sarama.ErrAlreadyConnected {
+					if err = b.Open(cmd.clientConfig); err != nil && err != sarama.ErrAlreadyConnected {
 						failf("failed to open broker connection err=%s", err)
 					}
 					if connected, err := broker.Connected(); !connected && err != nil {
@@ -226,7 +200,7 @@ type produceCmd struct {
 	decodeValue string
 	bufferSize  int
 
-	saramaConfig *sarama.Config
+	clientConfig *sarama.Config
 	leaders      map[int32]*sarama.Broker
 }
 
@@ -292,7 +266,7 @@ func (cmd *produceCmd) deserializeLines(in chan string, out chan message, partit
 					if cmd.verbose {
 						fmt.Fprintf(os.Stderr, "Failed to unmarshal input [%v], falling back to defaults. err=%v\n", l, err)
 					}
-					var v *string = &l
+					var v = &l
 					if len(l) == 0 {
 						v = nil
 					}
@@ -300,7 +274,7 @@ func (cmd *produceCmd) deserializeLines(in chan string, out chan message, partit
 				}
 			}
 
-			var part int32 = 0
+			var part int32
 			if msg.Key != nil && cmd.partitioner == "hashCode" {
 				part = hashCodePartition(*msg.Key, partitionCount)
 			}

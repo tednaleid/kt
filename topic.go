@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/user"
 	"regexp"
 	"strings"
 	"sync"
@@ -21,7 +20,7 @@ type topicArgs struct {
 	leaders    bool
 	replicas   bool
 	verbose    bool
-	version    string
+	connArgs   connectionArgs
 }
 
 type topicCmd struct {
@@ -33,7 +32,8 @@ type topicCmd struct {
 	verbose    bool
 	version    sarama.KafkaVersion
 
-	client sarama.Client
+	clientConfig *sarama.Config
+	client       sarama.Client
 }
 
 type topic struct {
@@ -61,7 +61,7 @@ func (cmd *topicCmd) parseFlags(as []string) topicArgs {
 	flags.BoolVar(&args.replicas, "replicas", false, "Include replica ids per partition.")
 	flags.StringVar(&args.filter, "filter", "", "Regex to filter topics by name.")
 	flags.BoolVar(&args.verbose, "verbose", false, "More verbose logging to stderr.")
-	flags.StringVar(&args.version, "version", "", "Kafka protocol version")
+	parseConnectionFlags(flags, &args.connArgs)
 	flags.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage of topic:")
 		flags.PrintDefaults()
@@ -107,27 +107,17 @@ func (cmd *topicCmd) parseArgs(as []string) {
 	cmd.leaders = args.leaders
 	cmd.replicas = args.replicas
 	cmd.verbose = args.verbose
-	cmd.version = kafkaVersion(args.version)
+	cmd.clientConfig = saramaConfig(&args.connArgs)
 }
 
 func (cmd *topicCmd) connect() {
-	var (
-		err error
-		usr *user.User
-		cfg = sarama.NewConfig()
-	)
+	var err error
 
-	cfg.Version = cmd.version
-
-	if usr, err = user.Current(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to read current user err=%v", err)
-	}
-	cfg.ClientID = "kt-topic-" + sanitizeUsername(usr.Username)
 	if cmd.verbose {
-		fmt.Fprintf(os.Stderr, "sarama client configuration %#v\n", cfg)
+		fmt.Fprintf(os.Stderr, "sarama client configuration %#v\n", cmd.clientConfig)
 	}
 
-	if cmd.client, err = sarama.NewClient(cmd.brokers, cfg); err != nil {
+	if cmd.client, err = sarama.NewClient(cmd.brokers, cmd.clientConfig); err != nil {
 		failf("failed to create client err=%v", err)
 	}
 }

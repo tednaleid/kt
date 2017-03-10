@@ -2,14 +2,23 @@ package main
 
 import (
 	"bufio"
+	"crypto/tls"
+	"flag"
 	"fmt"
 	"os"
+	"os/user"
 	"regexp"
 	"strings"
 	"unicode/utf16"
 
 	"github.com/Shopify/sarama"
 )
+
+type connectionArgs struct {
+	version    string
+	tls        bool
+	clientCert string
+}
 
 var (
 	v820  = sarama.V0_8_2_0
@@ -101,4 +110,37 @@ func sanitizeUsername(u string) string {
 	// Windows account can contain spaces or other special characters not supported
 	// in client ID. Keep the bare minimum and ditch the rest.
 	return invalidClientIDCharactersRegExp.ReplaceAllString(u, "")
+}
+
+func parseConnectionFlags(flags *flag.FlagSet, args *connectionArgs) {
+	flags.StringVar(&args.version, "version", "", "Kafka protocol version")
+	flags.BoolVar(&args.tls, "tls", false, "Enable TLS")
+	flags.StringVar(&args.clientCert, "clientCert", "", "Path to client certificate")
+}
+
+func saramaConfig(args *connectionArgs) *sarama.Config {
+	cfg := sarama.NewConfig()
+	cfg.Version = kafkaVersion(args.version)
+	usr, err := user.Current()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to read current user err=%v", err)
+	}
+	cfg.ClientID = "kt-consume-" + sanitizeUsername(usr.Username)
+	if args.tls {
+		cfg.Net.TLS.Enable = true
+	}
+
+	if args.clientCert != "" {
+		cfg.Net.TLS.Config = makeTLSConfig(args.clientCert)
+	}
+
+	return cfg
+}
+
+func makeTLSConfig(path string) *tls.Config {
+	cert, err := tls.LoadX509KeyPair(path, path)
+	if err != nil {
+		failf("Unable to load client certificate", err)
+	}
+	return &tls.Config{Certificates: []tls.Certificate{cert}, InsecureSkipVerify: true}
 }

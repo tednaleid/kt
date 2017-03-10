@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/user"
 	"regexp"
 	"strconv"
 	"strings"
@@ -22,10 +21,10 @@ type offsetCmd struct {
 	partition  int32
 	newOffsets int64
 	verbose    bool
-	version    sarama.KafkaVersion
 
 	out chan printContext
 
+	clientConfig  *sarama.Config
 	client        sarama.Client
 	broker        *sarama.Broker
 	offsetManager sarama.OffsetManager
@@ -38,7 +37,7 @@ type offsetArgs struct {
 	partition  int
 	setOffsets string
 	verbose    bool
-	version    string
+	connArgs   connectionArgs
 }
 
 type offsets struct {
@@ -59,7 +58,7 @@ func (cmd *offsetCmd) parseFlags(as []string) offsetArgs {
 	flags.IntVar(&args.partition, "partition", -1, "The identifier of the partition")
 	flags.StringVar(&args.setOffsets, "setConsumerOffsets", "", `Set offsets for the consumer groups to "oldest", "newest", or a specific numerical value. For more accurate modification also specify topic and/or partition`)
 	flags.BoolVar(&args.verbose, "verbose", false, "More verbose logging to stderr.")
-	flags.StringVar(&args.version, "version", "", "Kafka protocol version")
+	parseConnectionFlags(flags, &args.connArgs)
 	flags.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage of offset:")
 		flags.PrintDefaults()
@@ -96,11 +95,10 @@ func (cmd *offsetCmd) parseArgs(as []string) {
 	if cmd.topic, err = regexp.Compile(args.topic); err != nil {
 		failf("invalid regex for filter err=%s", err)
 	}
-
+	cmd.clientConfig = saramaConfig(&args.connArgs)
 	cmd.partition = int32(args.partition)
 	cmd.group = args.group
 	cmd.verbose = args.verbose
-	cmd.version = kafkaVersion(args.version)
 	cmd.setOffsets = args.setOffsets
 
 	switch args.setOffsets {
@@ -119,23 +117,13 @@ func (cmd *offsetCmd) parseArgs(as []string) {
 }
 
 func (cmd *offsetCmd) connect() {
-	var (
-		err error
-		usr *user.User
-		cfg = sarama.NewConfig()
-	)
-
-	cfg.Version = cmd.version
-	if usr, err = user.Current(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to read current user err=%v", err)
-	}
-	cfg.ClientID = "kt-offset-" + sanitizeUsername(usr.Username)
+	var err error
 
 	if cmd.verbose {
-		fmt.Fprintf(os.Stderr, "sarama client configuration %#v\n", cfg)
+		fmt.Fprintf(os.Stderr, "sarama client configuration %#v\n", cmd.clientConfig)
 	}
 
-	if cmd.client, err = sarama.NewClient(cmd.brokers, cfg); err != nil {
+	if cmd.client, err = sarama.NewClient(cmd.brokers, cmd.clientConfig); err != nil {
 		failf("failed to create client err=%v", err)
 	}
 
