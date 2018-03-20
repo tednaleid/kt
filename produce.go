@@ -301,7 +301,7 @@ func (cmd *produceCmd) deserializeLines(in chan string, out chan message, partit
 					if cmd.verbose {
 						fmt.Fprintf(os.Stderr, "Failed to unmarshal input [%v], falling back to defaults. err=%v\n", l, err)
 					}
-					var v *string = &l
+					var v = &l
 					if len(l) == 0 {
 						v = nil
 					}
@@ -309,7 +309,7 @@ func (cmd *produceCmd) deserializeLines(in chan string, out chan message, partit
 				}
 			}
 
-			var part int32 = 0
+			var part int32
 			if msg.Key != nil && cmd.partitioner == "hashCode" {
 				part = hashCodePartition(*msg.Key, partitionCount)
 			}

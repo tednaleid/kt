@@ -43,7 +43,7 @@ type topic struct {
 }
 
 type partition struct {
-	Id           int32   `json:"id"`
+	ID           int32   `json:"id"`
 	OldestOffset int64   `json:"oldest"`
 	NewestOffset int64   `json:"newest"`
 	Leader       string  `json:"leader,omitempty"`
@@ -208,7 +208,7 @@ func (cmd *topicCmd) readTopic(name string) (topic, error) {
 	}
 
 	for _, p := range ps {
-		np := partition{Id: p}
+		np := partition{ID: p}
 
 		if np.OldestOffset, err = cmd.client.GetOffset(name, p, sarama.OffsetOldest); err != nil {
 			return top, err
